@@ -11,6 +11,11 @@
   header { padding:28px 24px 8px; max-width:1100px; margin:0 auto; }
   h1 { font-size:24px; margin:0 0 4px; font-weight:650; }
   header p { margin:0; color:var(--muted); }
+  .sources { margin:14px 0 0; padding:12px 16px; background:var(--card); border:1px solid var(--line); border-radius:10px; font-size:14px; }
+  .sources b { display:block; margin-bottom:6px; }
+  .sources ul { margin:0; padding-left:18px; }
+  .sources li { margin:3px 0; }
+  .sources a { color:var(--accent); font-weight:600; }
   main { max-width:1100px; margin:0 auto; padding:8px 24px 48px; display:grid; gap:16px; }
   section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px 20px; }
   h2 { font-size:16px; margin:0 0 10px; font-weight:650; }
@@ -44,6 +49,15 @@
 <header>
   <h1>DEM to Terrain Mesh</h1>
   <p>Convert GeoTIFF elevation tiles into a terrain mesh for Rhino. Files stay in your browser and are not uploaded.</p>
+  <div class="sources">
+    <b>Where to get DEM tiles (GeoTIFF)</b>
+    <ul>
+      <li><a href="https://apps.nationalmap.gov/downloader/" target="_blank" rel="noopener">USGS National Map Downloader</a>: United States. Choose Elevation Products (3DEP), then 1 meter DEM.</li>
+      <li><a href="https://gis.ny.gov/nys-dem" target="_blank" rel="noopener">NYS GIS Elevation (Discover GIS Data NY)</a>: New York State. In DEM Results, open the Null tab for the 1 Meter DEM Index (NYS).</li>
+      <li><a href="https://coast.noaa.gov/dataviewer/" target="_blank" rel="noopener">NOAA Data Access Viewer</a>: coastal and lidar-derived DEMs, with custom area downloads.</li>
+      <li><a href="https://portal.opentopography.org/" target="_blank" rel="noopener">OpenTopography</a>: high-resolution lidar DEMs and global datasets. Global data often comes in latitude/longitude; reproject to UTM in QGIS before loading.</li>
+    </ul>
+  </div>
 </header>
 <main>
   <section id="s1">
