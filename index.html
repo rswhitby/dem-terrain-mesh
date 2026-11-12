@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DEM to Terrain Mesh</title>
+<style>
+  :root { --ink:#1d1d1b; --muted:#6b6a65; --line:#dedcd5; --bg:#faf9f6; --card:#fff; --accent:#1f6f5c; --accent-ink:#fff; --warn:#a33b2a; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; color:var(--ink); background:var(--bg); }
+  header { padding:28px 24px 8px; max-width:1100px; margin:0 auto; }
+  h1 { font-size:24px; margin:0 0 4px; font-weight:650; }
+  header p { margin:0; color:var(--muted); }
+  main { max-width:1100px; margin:0 auto; padding:8px 24px 48px; display:grid; gap:16px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px 20px; }
+  h2 { font-size:16px; margin:0 0 10px; font-weight:650; }
+  .hint { color:var(--muted); margin:0 0 10px; font-size:14px; }
+  .drop { display:flex; align-items:center; justify-content:center; text-align:center; min-height:110px; border:1.5px dashed #b9b6ab; border-radius:8px; color:var(--muted); cursor:pointer; padding:16px; }
+  .drop.over { border-color:var(--accent); color:var(--accent); background:#f1f7f5; }
+  .drop input { display:none; }
+  .kv { display:grid; grid-template-columns:max-content 1fr; gap:3px 16px; font-size:14px; margin-top:12px; }
+  .kv b { font-weight:600; color:var(--muted); }
+  .canvaswrap { position:relative; border:1px solid var(--line); border-radius:6px; overflow:hidden; background:#ececec; touch-action:none; }
+  canvas#map { display:block; width:100%; height:auto; cursor:crosshair; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:10px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:12px 20px; }
+  label.f { display:grid; gap:4px; font-size:13px; color:var(--muted); }
+  label.f span.note { font-size:12px; }
+  select, input[type=number] { font:inherit; color:var(--ink); padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:#fff; }
+  label.chk { display:flex; gap:8px; align-items:center; font-size:14px; }
+  button { font:inherit; border:1px solid var(--line); background:#fff; color:var(--ink); padding:8px 14px; border-radius:6px; cursor:pointer; }
+  button.primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:600; }
+  button:disabled { opacity:.5; cursor:default; }
+  #view { height:460px; border:1px solid var(--line); border-radius:6px; overflow:hidden; background:#e9e8e3; }
+  .est { font-size:14px; color:var(--muted); margin-top:12px; }
+  .msg { font-size:14px; margin:8px 0 0; }
+  .msg.err { color:var(--warn); }
+  details { margin-top:14px; font-size:14px; }
+  details li { margin:3px 0; }
+  .two { display:grid; grid-template-columns: 1fr; gap:16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>DEM to Terrain Mesh</h1>
+  <p>Convert GeoTIFF elevation tiles into a terrain mesh for Rhino. Files stay in your browser and are not uploaded.</p>
+</header>
+<main>
+  <section id="s1">
+    <h2>1. Load DEM tiles</h2>
+    <p class="hint">One or more adjacent GeoTIFF tiles (.tif) in a projected coordinate system such as UTM. Adjacent tiles merge automatically.</p>
+    <label class="drop" id="drop"><input type="file" id="file" accept=".tif,.tiff" multiple><span id="droptext">Drop .tif files here, or click to choose</span></label>
+    <p class="msg" id="loadmsg"></p>
+    <div class="kv" id="info"></div>
+  </section>
+
+  <section id="s2" hidden>
+    <h2>2. Select the area</h2>
+    <p class="hint">Drag a box on the shaded map. Without a box, the tool uses the full extent.</p>
+    <div class="canvaswrap"><canvas id="map"></canvas></div>
+    <div class="row"><button id="clearSel">Use full extent</button><span class="est" id="selinfo" style="margin:0"></span></div>
+  </section>
+
+  <section id="s3" hidden>
+    <h2>3. Options</h2>
+    <div class="grid">
+      <label class="f">Source units (from file)
+        <select id="srcUnit"><option value="1">metres</option><option value="0.3048">feet</option><option value="0.3048006096">US survey feet</option></select>
+      </label>
+      <label class="f">Output units
+        <select id="outUnit"><option value="m">metres</option><option value="ft" selected>feet</option><option value="in">inches</option></select>
+      </label>
+      <label class="f">Resolution
+        <select id="step"><option value="1">full (every cell)</option><option value="2" selected>every 2nd cell</option><option value="3">every 3rd cell</option><option value="4">every 4th cell</option><option value="8">every 8th cell</option></select>
+        <span class="note" id="cellnote"></span>
+      </label>
+      <label class="f">Origin (X, Y)
+        <select id="originXY"><option value="centre">centre of the area</option><option value="corner">south-west corner of the area</option><option value="keep">keep map coordinates</option></select>
+      </label>
+      <label class="f">Origin (Z)
+        <select id="originZ"><option value="min">lowest point = 0</option><option value="keep">keep elevations</option></select>
+      </label>
+      <label class="f">Vertical exaggeration
+        <input type="number" id="exag" value="1" min="0.1" max="20" step="0.1">
+      </label>
+      <label class="f">Solid base
+        <label class="chk"><input type="checkbox" id="base"> add sides and a flat bottom</label>
+      </label>
+      <label class="f">Base thickness (output units)
+        <input type="number" id="baseT" value="10" min="0" step="1">
+      </label>
+    </div>
+    <p class="est" id="est"></p>
+    <div class="row"><button class="primary" id="gen">Generate mesh</button></div>
+    <p class="msg" id="genmsg"></p>
+  </section>
+
+  <section id="s4" hidden>
+    <h2>4. Preview and download</h2>
+    <div id="view"></div>
+    <div class="kv" id="stats"></div>
+    <div class="row"><button class="primary" id="dl" disabled>Download .zip (OBJ + info)</button></div>
+    <p class="msg" id="dlmsg"></p>
+    <details open>
+      <summary>Importing into Rhino</summary>
+      <ul>
+        <li>Unzip, then <b>Import</b> or drag the .obj into Rhino.</li>
+        <li>In the OBJ import options, leave <b>Map OBJ Y to Rhino Z</b> unchecked. The file is already Z-up.</li>
+        <li>Set the Rhino model units to the output units you chose here.</li>
+        <li>The .txt file records the origin in map coordinates, so you can place other data (camera positions, survey points) in the same frame.</li>
+        <li>A DEM shows bare ground only. Trees and buildings are removed, and water surfaces are flattened.</li>
+      </ul>
+    </details>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/geotiff@2.1.3/dist-browser/geotiff.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+<script id="core">
+/* ---------- core: reading, merging, meshing (no DOM) ---------- */
+const UNIT_KEYS = { 9001: 1, 9002: 0.3048, 9003: 0.3048006096 };
+const OUT_PER_M = { m: 1, ft: 3.280839895, in: 39.37007874 };
+
+async function readTile(buf, name) {
+  const tiff = await GeoTIFF.fromArrayBuffer(buf);
+  const img = await tiff.getImage();
+  const gk = img.getGeoKeys() || {};
+  const [rx, ry] = img.getResolution();
+  let [ox, oy] = img.getOrigin();
+  if (gk.GTRasterTypeGeoKey === 2) { ox -= Math.abs(rx) / 2; oy += Math.abs(ry) / 2; }   // PixelIsPoint: tie point is a cell centre
+  const w = img.getWidth(), h = img.getHeight();
+  const nd = img.getGDALNoData();
+  const data = await img.readRasters({ samples: [0], interleave: true });
+  return { name, w, h, ox, oy, rx: Math.abs(rx), ry: Math.abs(ry), nd, data,
+           epsg: gk.ProjectedCSTypeGeoKey || gk.GeographicTypeGeoKey || null,
+           unit: UNIT_KEYS[gk.ProjLinearUnitsGeoKey] || null,
+           geographic: gk.GTModelTypeGeoKey === 2 };
+}
+
+function isNoData(v, nd) {
+  if (!Number.isFinite(v) || v < -1e5) return true;
+  return nd !== null && nd !== undefined && Math.abs(v - nd) <= 1e-3 * Math.max(1, Math.abs(nd));
+}
+
+function mergeTiles(tiles) {
+  const res = tiles[0].rx;
+  for (const t of tiles) {
+    if (Math.abs(t.rx - res) > 1e-6 * res || Math.abs(t.ry - res) > 1e-6 * res) throw new Error('All tiles need the same, square cell size.');
+    if (t.epsg !== tiles[0].epsg) throw new Error('All tiles need the same coordinate system.');
+  }
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const t of tiles) {
+    minX = Math.min(minX, t.ox); maxX = Math.max(maxX, t.ox + t.w * res);
+    maxY = Math.max(maxY, t.oy); minY = Math.min(minY, t.oy - t.h * res);
+  }
+  const W = Math.round((maxX - minX) / res), H = Math.round((maxY - minY) / res);
+  if (W * H > 60e6) throw new Error('The merged area is too large for the browser (over 60 million cells). Load fewer tiles.');
+  const z = new Float32Array(W * H).fill(NaN);
+  for (const t of tiles) {
+    const c0 = Math.round((t.ox - minX) / res), r0 = Math.round((maxY - t.oy) / res);
+    for (let r = 0; r < t.h; r++) {
+      const row = (r0 + r) * W + c0, src = r * t.w;
+      for (let c = 0; c < t.w; c++) { const v = t.data[src + c]; if (!isNoData(v, t.nd)) z[row + c] = v; }
+    }
+  }
+  let zmin = Infinity, zmax = -Infinity;
+  for (let i = 0; i < z.length; i++) { const v = z[i]; if (v === v) { if (v < zmin) zmin = v; if (v > zmax) zmax = v; } }
+  return { W, H, res, minX, maxY, z, zmin, zmax, epsg: tiles[0].epsg, unit: tiles[0].unit, names: tiles.map(t => t.name) };
+}
+
+/* sel: {c0, r0, c1, r1} inclusive cell indices. opts: {step, src, out, exag, originXY, originZ, base, baseT} */
+function buildMesh(dem, sel, opts) {
+  const { W, res, minX, maxY, z } = dem;
+  const step = Math.max(1, opts.step | 0);
+  const cols = [], rows = [];
+  for (let c = sel.c0; c <= sel.c1; c += step) cols.push(c);
+  for (let r = sel.r0; r <= sel.r1; r += step) rows.push(r);
+  const nx = cols.length, ny = rows.length;
+  const k = opts.src * OUT_PER_M[opts.out];          // source units -> output units
+  let zref = 0, selMin = Infinity, selMax = -Infinity;
+  for (const r of rows) for (const c of cols) { const v = z[r * W + c]; if (v === v) { if (v < selMin) selMin = v; if (v > selMax) selMax = v; } }
+  if (!Number.isFinite(selMin)) throw new Error('The selected area has no elevation data.');
+  if (opts.originZ === 'min') zref = selMin;
+  const X = c => minX + (c + 0.5) * res, Y = r => maxY - (r + 0.5) * res;
+  let refX = 0, refY = 0;
+  if (opts.originXY === 'centre') { refX = (X(cols[0]) + X(cols[nx - 1])) / 2; refY = (Y(rows[0]) + Y(rows[ny - 1])) / 2; }
+  else if (opts.originXY === 'corner') { refX = X(cols[0]); refY = Y(rows[ny - 1]); }
+  const idx = new Int32Array(nx * ny).fill(-1);
+  const pos = []; let n = 0, holes = false;
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    const v = z[rows[j] * W + cols[i]];
+    if (v !== v) { holes = true; continue; }
+    pos.push((X(cols[i]) - refX) * k, (Y(rows[j]) - refY) * k, (v - zref) * k * opts.exag);
+    idx[j * nx + i] = n++;
+  }
+  const faces = [];                                   // arrays of 0-based vertex indices
+  for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
+    const a = idx[j * nx + i], b = idx[j * nx + i + 1], c = idx[(j + 1) * nx + i + 1], d = idx[(j + 1) * nx + i];
+    if (a >= 0 && b >= 0 && c >= 0 && d >= 0) faces.push([a, d, c, b]);   // counter-clockwise seen from above
+  }
+  let baseNote = '';
+  if (opts.base) {
+    if (holes) baseNote = 'Base skipped: the area has gaps in the data.';
+    else {
+      const zb = (selMin - zref) * k * opts.exag - opts.baseT;
+      const per = [];
+      for (let j = 0; j < ny; j++) per.push(idx[j * nx]);
+      for (let i = 1; i < nx; i++) per.push(idx[(ny - 1) * nx + i]);
+      for (let j = ny - 2; j >= 0; j--) per.push(idx[j * nx + nx - 1]);
+      for (let i = nx - 2; i > 0; i--) per.push(idx[i]);
+      const bot = per.map(t => { pos.push(pos[3 * t], pos[3 * t + 1], zb); return n++; });
+      for (let q = 0; q < per.length; q++) {
+        const p2 = (q + 1) % per.length;
+        faces.push([per[q], bot[q], bot[p2], per[p2]]);
+      }
+      const cx = (pos[3 * idx[0]] + pos[3 * idx[nx - 1]]) / 2, cy = (pos[3 * idx[0] + 1] + pos[3 * idx[(ny - 1) * nx] + 1]) / 2;
+      pos.push(cx, cy, zb); const cb = n++;
+      for (let q = 0; q < bot.length; q++) faces.push([cb, bot[(q + 1) % bot.length], bot[q]]);
+    }
+  }
+  return { pos, faces, nv: n, nx, ny, refX, refY, zref, selMin, selMax, holes, baseNote,
+           cell: res * step * k, width: (nx - 1) * res * step * k, depth: (ny - 1) * res * step * k };
+}
+
+function toOBJ(mesh, header) {
+  const parts = header.map(h => '# ' + h);
+  const p = mesh.pos;
+  for (let i = 0; i < p.length; i += 3) parts.push('v ' + p[i].toFixed(3) + ' ' + p[i + 1].toFixed(3) + ' ' + p[i + 2].toFixed(3));
+  for (const f of mesh.faces) parts.push('f ' + f.map(v => v + 1).join(' '));
+  return parts.join('\n') + '\n';
+}
+</script>
+
+<script>
+/* ---------- UI ---------- */
+const $ = id => document.getElementById(id);
+let tiles = [], dem = null, sel = null, mesh = null, downloads = null, mapScale = 1;
+
+(async () => {
+  try { downloads = await window.claude?.use?.('downloads'); } catch (e) { downloads = null; }
+  refreshDownloadButton();
+})();
+
+function refreshDownloadButton() {
+  if (!mesh) { $('dl').disabled = true; return; }
+  $('dl').disabled = false;
+}
+
+const drop = $('drop');
+['dragenter', 'dragover'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', ev => loadFiles([...ev.dataTransfer.files]));
+$('file').addEventListener('change', ev => loadFiles([...ev.target.files]));
+
+async function loadFiles(files) {
+  files = files.filter(f => /\.tiff?$/i.test(f.name));
+  if (!files.length) { setMsg('loadmsg', 'Choose .tif files.', true); return; }
+  setMsg('loadmsg', 'Reading ' + files.length + ' file(s)...');
+  try {
+    tiles = [];
+    for (const f of files) tiles.push(await readTile(await f.arrayBuffer(), f.name));
+    if (tiles.some(t => t.geographic)) throw new Error('These files use latitude and longitude. Reproject them to a projected system such as UTM first (QGIS: Raster > Projections > Warp).');
+    dem = mergeTiles(tiles);
+    tiles = [];
+    sel = null; mesh = null;
+    setMsg('loadmsg', '');
+    $('droptext').textContent = dem.names.join(', ') + '  (drop new files to replace)';
+    const u = dem.unit || 1;
+    $('srcUnit').value = String(u);
+    showInfo();
+    drawMap();
+    $('s2').hidden = false; $('s3').hidden = false; $('s4').hidden = true;
+    updateEstimate();
+  } catch (e) {
+    console.error(e); setMsg('loadmsg', e.message || String(e), true);
+  }
+}
+
+function setMsg(id, t, err) { const el = $(id); el.textContent = t; el.classList.toggle('err', !!err); }
+
+function showInfo() {
+  const u = Number($('srcUnit').value);
+  const uname = u === 1 ? 'm' : 'ft';
+  const rows = [
+    ['Tiles', dem.names.length + ' merged'],
+    ['Coordinate system', dem.epsg ? 'EPSG:' + dem.epsg : 'not recorded'],
+    ['Cell size', fmt(dem.res) + ' ' + uname],
+    ['Extent', fmt(dem.W * dem.res) + ' x ' + fmt(dem.H * dem.res) + ' ' + uname + '  (' + dem.W + ' x ' + dem.H + ' cells)'],
+    ['Elevation', fmt(dem.zmin) + ' to ' + fmt(dem.zmax) + ' ' + uname]];
+  $('info').innerHTML = rows.map(([a, b]) => '<b>' + a + '</b><span>' + b + '</span>').join('');
+}
+function fmt(v, d) { return Number(v).toLocaleString(undefined, { maximumFractionDigits: d === undefined ? 1 : d }); }
+
+/* hillshade map */
+let shadeImg = null;
+function drawMap() {
+  const cv = $('map');
+  mapScale = Math.max(1, Math.ceil(Math.max(dem.W, dem.H) / 1400));
+  const w = Math.floor(dem.W / mapScale), h = Math.floor(dem.H / mapScale);
+  cv.width = w; cv.height = h;
+  const ctx = cv.getContext('2d'); const im = ctx.createImageData(w, h);
+  const s = mapScale, W = dem.W, z = dem.z, cell = dem.res * s;
+  const g = (x, y) => { const v = z[Math.min(dem.H - 1, y * s) * W + Math.min(W - 1, x * s)]; return v; };
+  const zr = dem.zmax - dem.zmin || 1;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const v = g(x, y), o = 4 * (y * w + x);
+    if (v !== v) { im.data[o] = im.data[o + 1] = im.data[o + 2] = 210; im.data[o + 3] = 255; continue; }
+    const vl = g(Math.max(0, x - 1), y), vr = g(Math.min(w - 1, x + 1), y), vu = g(x, Math.max(0, y - 1)), vd = g(x, Math.min(h - 1, y + 1));
+    const dx = ((vr === vr ? vr : v) - (vl === vl ? vl : v)) / (2 * cell), dy = ((vd === vd ? vd : v) - (vu === vu ? vu : v)) / (2 * cell);
+    const shade = Math.max(0, Math.min(1, (1 + (-dx + dy) * 0.7071) / Math.sqrt(1 + dx * dx + dy * dy)));
+    const t = (v - dem.zmin) / zr;
+    const base = [120 + 100 * t, 140 + 70 * t, 110 + 80 * t];
+    const l = 0.35 + 0.75 * shade;
+    im.data[o] = Math.min(255, base[0] * l); im.data[o + 1] = Math.min(255, base[1] * l); im.data[o + 2] = Math.min(255, base[2] * l); im.data[o + 3] = 255;
+  }
+  ctx.putImageData(im, 0, 0);
+  shadeImg = ctx.getImageData(0, 0, w, h);
+  drawSel();
+}
+function drawSel() {
+  const cv = $('map'), ctx = cv.getContext('2d');
+  ctx.putImageData(shadeImg, 0, 0);
+  if (!sel) { $('selinfo').textContent = 'Full extent selected.'; return; }
+  const x0 = sel.c0 / mapScale, y0 = sel.r0 / mapScale, x1 = (sel.c1 + 1) / mapScale, y1 = (sel.r1 + 1) / mapScale;
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.fillRect(0, 0, cv.width, y0); ctx.fillRect(0, y1, cv.width, cv.height - y1);
+  ctx.fillRect(0, y0, x0, y1 - y0); ctx.fillRect(x1, y0, cv.width - x1, y1 - y0);
+  ctx.strokeStyle = '#ffd200'; ctx.lineWidth = Math.max(1.5, cv.width / 500); ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+  const u = Number($('srcUnit').value) === 1 ? 'm' : 'ft';
+  $('selinfo').textContent = 'Selected ' + fmt((sel.c1 - sel.c0 + 1) * dem.res, 0) + ' x ' + fmt((sel.r1 - sel.r0 + 1) * dem.res, 0) + ' ' + u + '.';
+}
+let dragStart = null;
+const cvMap = $('map');
+function cellAt(ev) {
+  const r = cvMap.getBoundingClientRect();
+  const x = (ev.clientX - r.left) / r.width * cvMap.width, y = (ev.clientY - r.top) / r.height * cvMap.height;
+  return [Math.max(0, Math.min(dem.W - 1, Math.round(x * mapScale))), Math.max(0, Math.min(dem.H - 1, Math.round(y * mapScale)))];
+}
+cvMap.addEventListener('pointerdown', ev => { if (!dem) return; cvMap.setPointerCapture(ev.pointerId); dragStart = cellAt(ev); });
+cvMap.addEventListener('pointermove', ev => {
+  if (!dragStart) return; const [c, r] = cellAt(ev);
+  sel = { c0: Math.min(c, dragStart[0]), c1: Math.max(c, dragStart[0]), r0: Math.min(r, dragStart[1]), r1: Math.max(r, dragStart[1]) };
+  drawSel(); updateEstimate();
+});
+cvMap.addEventListener('pointerup', () => { dragStart = null; if (sel && (sel.c1 - sel.c0 < 2 || sel.r1 - sel.r0 < 2)) { sel = null; drawSel(); } updateEstimate(); });
+$('clearSel').addEventListener('click', () => { sel = null; drawSel(); updateEstimate(); });
+
+function currentSel() { return sel || { c0: 0, r0: 0, c1: dem.W - 1, r1: dem.H - 1 }; }
+function currentOpts() {
+  return { step: Number($('step').value), src: Number($('srcUnit').value), out: $('outUnit').value, exag: Math.max(0.01, Number($('exag').value) || 1),
+           originXY: $('originXY').value, originZ: $('originZ').value, base: $('base').checked, baseT: Math.max(0, Number($('baseT').value) || 0) };
+}
+['srcUnit', 'outUnit', 'step', 'exag', 'base', 'baseT', 'originXY', 'originZ'].forEach(id => $(id).addEventListener('input', () => { if (id === 'srcUnit') { showInfo(); drawSel(); } updateEstimate(); }));
+
+function updateEstimate() {
+  if (!dem) return;
+  const s = currentSel(), o = currentOpts();
+  const nx = Math.floor((s.c1 - s.c0) / o.step) + 1, ny = Math.floor((s.r1 - s.r0) / o.step) + 1;
+  const nv = nx * ny, nf = (nx - 1) * (ny - 1);
+  const cell = dem.res * o.step * o.src * OUT_PER_M[o.out];
+  $('cellnote').textContent = 'Mesh spacing: ' + fmt(cell, 2) + ' ' + o.out;
+  const mb = (nv * 32 + nf * 36) / 1e6;
+  let t = 'About ' + fmt(nv, 0) + ' vertices, ' + fmt(nf, 0) + ' faces, ' + fmt(mb, 0) + ' MB OBJ.';
+  if (nv > 3e6) t += ' This is very large: choose a coarser resolution or a smaller area.';
+  $('est').textContent = t;
+  $('gen').disabled = nv > 8e6;
+}
+
+/* generate */
+$('gen').addEventListener('click', () => {
+  setMsg('genmsg', 'Building mesh...');
+  setTimeout(() => {
+    try {
+      const s = currentSel(), o = currentOpts();
+      mesh = buildMesh(dem, s, o);
+      mesh.opts = o; mesh.sel = s;
+      setMsg('genmsg', mesh.baseNote || '');
+      $('s4').hidden = false;
+      showStats(); renderPreview(); refreshDownloadButton();
+      $('s4').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (e) { console.error(e); setMsg('genmsg', e.message || String(e), true); }
+  }, 30);
+});
+
+function showStats() {
+  const o = mesh.opts, u = o.out, su = o.src === 1 ? 'm' : 'ft';
+  const rows = [
+    ['Size', fmt(mesh.width) + ' x ' + fmt(mesh.depth) + ' ' + u + ', spacing ' + fmt(mesh.cell, 2) + ' ' + u],
+    ['Height range', fmt((mesh.selMax - mesh.selMin) * o.src * OUT_PER_M[u] * o.exag) + ' ' + u + (o.exag !== 1 ? ' (exaggerated x' + o.exag + ')' : '')],
+    ['Vertices / faces', fmt(mesh.nv, 0) + ' / ' + fmt(mesh.faces.length, 0)],
+    ['Origin in map coordinates', o.originXY === 'keep' ? 'none (map coordinates kept)' : 'X ' + fmt(mesh.refX, 2) + ', Y ' + fmt(mesh.refY, 2) + ' ' + su + (dem.epsg ? ' (EPSG:' + dem.epsg + ')' : '')],
+    ['Z = 0 at', o.originZ === 'min' ? 'elevation ' + fmt(mesh.zref, 2) + ' ' + su : 'elevation 0']];
+  $('stats').innerHTML = rows.map(([a, b]) => '<b>' + a + '</b><span>' + b + '</span>').join('');
+}
+
+/* 3D preview */
+let renderer = null, scene, camera, controls, previewObj = null;
+function renderPreview() {
+  const el = $('view');
+  if (!window.THREE) { el.textContent = 'Preview unavailable.'; return; }
+  if (!renderer) {
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    el.appendChild(renderer.domElement);
+    scene = new THREE.Scene(); scene.background = new THREE.Color(0xe9e8e3);
+    camera = new THREE.PerspectiveCamera(40, 1, 0.1, 1e7);
+    controls = new THREE.OrbitControls(camera, renderer.domElement); controls.enableDamping = true;
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8577, 0.75));
+    const sun = new THREE.DirectionalLight(0xffffff, 0.8); sun.position.set(-1, 2, 1.2); scene.add(sun);
+    const loop = () => { controls.update(); renderer.render(scene, camera); requestAnimationFrame(loop); }; loop();
+    new ResizeObserver(sizeView).observe(el);
+  }
+  sizeView();
+  if (previewObj) { scene.remove(previewObj); previewObj.geometry.dispose(); }
+  const o = mesh.opts;
+  const maxV = 350000;
+  let pm = mesh;
+  if (mesh.nv > maxV) { const f = Math.ceil(Math.sqrt(mesh.nv / maxV)); pm = buildMesh(dem, mesh.sel, Object.assign({}, o, { step: o.step * f })); }
+  const p = pm.pos, pos = new Float32Array(p.length);
+  let zmin = Infinity, zmax = -Infinity;
+  for (let i = 0; i < p.length; i += 3) { pos[i] = p[i]; pos[i + 1] = p[i + 2]; pos[i + 2] = -p[i + 1]; zmin = Math.min(zmin, p[i + 2]); zmax = Math.max(zmax, p[i + 2]); }
+  const tri = [];
+  for (const f of pm.faces) { for (let k = 1; k < f.length - 1; k++) tri.push(f[0], f[k], f[k + 1]); }
+  const col = new Float32Array(p.length);
+  for (let i = 0; i < p.length; i += 3) { const t = (p[i + 2] - zmin) / ((zmax - zmin) || 1); col[i] = 0.55 + 0.35 * t; col[i + 1] = 0.6 + 0.25 * t; col[i + 2] = 0.5 + 0.35 * t; }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  g.setIndex(tri.length > 65535 * 3 || pos.length / 3 > 65535 ? new THREE.Uint32BufferAttribute(tri, 1) : new THREE.Uint16BufferAttribute(tri, 1));
+  g.computeVertexNormals(); g.computeBoundingSphere();
+  previewObj = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0, side: THREE.DoubleSide }));
+  scene.add(previewObj);
+  const bs = g.boundingSphere; controls.target.copy(bs.center);
+  camera.position.set(bs.center.x - bs.radius * 0.9, bs.center.y + bs.radius * 1.0, bs.center.z + bs.radius * 1.4);
+  camera.near = bs.radius / 1000; camera.far = bs.radius * 20; camera.updateProjectionMatrix();
+}
+function sizeView() { if (!renderer) return; const el = $('view'); const w = el.clientWidth, h = el.clientHeight; renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix(); }
+
+/* download */
+$('dl').addEventListener('click', async () => {
+  if (!mesh) return;
+  setMsg('dlmsg', 'Preparing file...');
+  try {
+    const o = mesh.opts, su = o.src === 1 ? 'm' : 'ft';
+    const name = (dem.names[0] || 'terrain').replace(/\.tiff?$/i, '').replace(/[^\w-]+/g, '_') + (dem.names.length > 1 ? '_merged' : '');
+    const info = [
+      'Terrain mesh from DEM',
+      'Source files: ' + dem.names.join(', '),
+      'Coordinate system: ' + (dem.epsg ? 'EPSG:' + dem.epsg : 'not recorded'),
+      'Source cell size: ' + dem.res + ' ' + su + ', mesh spacing: ' + mesh.cell.toFixed(3) + ' ' + o.out,
+      'Output units: ' + o.out + ' (set Rhino model units to match)',
+      'Axes: X = east, Y = north, Z = up',
+      o.originXY === 'keep' ? 'XY origin: map coordinates kept' : 'XY origin (0,0) = map X ' + mesh.refX.toFixed(3) + ', Y ' + mesh.refY.toFixed(3) + ' ' + su,
+      o.originZ === 'min' ? 'Z = 0 at elevation ' + mesh.zref.toFixed(3) + ' ' + su : 'Z = elevation',
+      'Vertical exaggeration: ' + o.exag,
+      'Vertices: ' + mesh.nv + ', faces: ' + mesh.faces.length,
+      mesh.baseNote || (o.base ? 'Solid base: ' + o.baseT + ' ' + o.out + ' below the lowest point' : 'Solid base: none')];
+    const obj = toOBJ(mesh, info);
+    const zip = new JSZip();
+    zip.file(name + '.obj', obj);
+    zip.file(name + '_info.txt', info.join('\n') + '\n');
+    const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+    const fname = name + '_mesh.zip';
+    if (downloads) {
+      await downloads.save({ filename: fname, data: blob });
+    } else {
+      const url = URL.createObjectURL(blob), a = document.createElement('a');
+      a.href = url; a.download = fname; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    }
+    setMsg('dlmsg', 'Saved ' + fname + '.');
+  } catch (e) {
+    const code = e && e.code;
+    if (code === 'declined') setMsg('dlmsg', 'Download cancelled.');
+    else if (code === 'rate_limited') setMsg('dlmsg', 'A save prompt is already open. Try again in a moment.', true);
+    else if (code === 'extension_not_enabled' || code === 'rejected_extension') setMsg('dlmsg', 'ZIP downloads are not available in this view.', true);
+    else { console.error(e); setMsg('dlmsg', (e && e.message) || 'The download failed.', true); }
+  }
+});
+</script>
+</body>
+</html>
